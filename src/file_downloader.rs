@@ -10,15 +10,19 @@ pub async fn download_listed_files(
         if let Some(segments) = url_str.path_segments() {
             if let Some(file_name) = segments.last() {
                 let file_path = format!("{}/{}", download_path, file_name);
-                let response = reqwest::get(link).await?;
-
-                let mut dest = std::fs::File::create(file_path)?;
-                let mut content = Cursor::new(response.bytes().await?);
-                std::io::copy(&mut content, &mut dest)?;
+                download_file(link, file_path).await?;
             }
         }
     }
 
+    Ok(())
+}
+
+async fn download_file(link: &String, file_path: String) -> Result<(), Box<dyn std::error::Error>> {
+    let response = reqwest::get(link).await?;
+    let mut dest = std::fs::File::create(file_path)?;
+    let mut content = Cursor::new(response.bytes().await?);
+    std::io::copy(&mut content, &mut dest)?;
     Ok(())
 }
 
