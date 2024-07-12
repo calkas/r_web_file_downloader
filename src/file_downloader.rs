@@ -1,28 +1,59 @@
+use futures::future::join_all;
 use reqwest::Url;
+use std::error::Error;
+use std::fmt::{self, write};
 use std::io::Cursor;
+
+#[derive(Debug)]
+struct DownloadError;
+
+impl fmt::Display for DownloadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Error with download files.")
+    }
+}
+
+impl Error for DownloadError {}
 
 pub async fn download_listed_files(
     links: &Vec<String>,
     download_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let mut download_tasks = vec![];
+
     for link in links.iter() {
-        let url_str = Url::parse(link)?;
-        if let Some(segments) = url_str.path_segments() {
-            if let Some(file_name) = segments.last() {
-                let file_path = format!("{}/{}", download_path, file_name);
-                download_file(link, file_path).await?;
-            }
+        download_tasks.push(download_file(link, download_path));
+    }
+
+    let res_output: Vec<Result<(), Box<dyn std::error::Error>>> = join_all(download_tasks).await;
+
+    for res in res_output.iter() {
+        if res.is_err() {
+            let error: Box<dyn Error> = Box::new(DownloadError);
+            return Err(error);
         }
     }
 
     Ok(())
 }
 
-async fn download_file(link: &String, file_path: String) -> Result<(), Box<dyn std::error::Error>> {
-    let response = reqwest::get(link).await?;
-    let mut dest = std::fs::File::create(file_path)?;
-    let mut content = Cursor::new(response.bytes().await?);
-    std::io::copy(&mut content, &mut dest)?;
+async fn download_file(
+    link: &String,
+    download_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let url_str = Url::parse(link)?;
+    println!("Downloading file: {}", link);
+    if let Some(segments) = url_str.path_segments() {
+        if let Some(file_name) = segments.last() {
+            let file_path = format!("{}/{}", download_path, file_name);
+            let response = reqwest::get(link).await?;
+            let mut dest = std::fs::File::create(file_path)?;
+            let mut content = Cursor::new(response.bytes().await?);
+            std::io::copy(&mut content, &mut dest)?;
+        }
+    }
+
+    println!("Downloaded file: {}", link);
     Ok(())
 }
 
