@@ -1,9 +1,11 @@
 use futures::future::join_all;
+use futures::Future;
 use reqwest::Url;
 use std::error::Error;
-use std::fmt::{self, write};
+use std::fmt;
 use std::io::Cursor;
-
+use std::sync::Arc;
+use std::sync::Mutex;
 #[derive(Debug)]
 struct DownloadError;
 
@@ -15,24 +17,106 @@ impl fmt::Display for DownloadError {
 
 impl Error for DownloadError {}
 
+#[derive(PartialEq)]
+enum DownloadStatus {
+    InProgress,
+    Completed,
+}
+
+struct JobStatus {
+    download_status: DownloadStatus,
+}
+impl Default for JobStatus {
+    fn default() -> Self {
+        Self {
+            download_status: DownloadStatus::InProgress,
+        }
+    }
+}
+
+struct DownloadProgressIndicator {
+    status_of_tasks: Vec<Arc<Mutex<JobStatus>>>,
+    information_log: String,
+}
+
+impl Future for DownloadProgressIndicator {
+    type Output = bool;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let mut is_lock_fail = false;
+        let number_of_jobs = self.status_of_tasks.len();
+        let mut jobs_completed: usize = 0;
+
+        for job_status in self.status_of_tasks.iter() {
+            match job_status.try_lock() {
+                Ok(guard) => {
+                    if guard.download_status == DownloadStatus::Completed {
+                        jobs_completed += 1;
+                    }
+                }
+                Err(_) => {
+                    is_lock_fail = true;
+                    continue;
+                }
+            };
+        }
+
+        let percent_of_done = (jobs_completed as f32 / number_of_jobs as f32) * 100.0;
+
+        let new_information_log = format!("Download in {}%", percent_of_done);
+        if new_information_log != self.information_log {
+            println!("{}", new_information_log);
+            self.information_log = new_information_log;
+        }
+
+        if is_lock_fail || percent_of_done < 100.0 {
+            cx.waker().wake_by_ref();
+            return std::task::Poll::Pending;
+        }
+
+        println!("Download completed");
+        std::task::Poll::Ready(true)
+    }
+}
+
 pub async fn download_listed_files(
-    links: &Vec<String>,
+    links: &[String],
     download_path: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut download_tasks = vec![];
+    let mut download_status_of_tasks = vec![];
 
     for link in links.iter() {
-        download_tasks.push(download_file(link, download_path));
+        download_status_of_tasks.push(Arc::new(Mutex::new(JobStatus::default())));
+
+        download_tasks.push(download_file(
+            link,
+            download_path,
+            download_status_of_tasks.last().unwrap().clone(),
+        ));
     }
+
+    let download_indicator = DownloadProgressIndicator {
+        status_of_tasks: download_status_of_tasks,
+        information_log: String::new(),
+    };
+    let download_indicator_handler = tokio::spawn(download_indicator);
 
     let res_output: Vec<Result<(), Box<dyn std::error::Error>>> = join_all(download_tasks).await;
 
     for res in res_output.iter() {
         if res.is_err() {
             let error: Box<dyn Error> = Box::new(DownloadError);
+            download_indicator_handler.abort();
+            println!("Error downloading files.");
             return Err(error);
         }
     }
+
+    download_indicator_handler.await.unwrap();
 
     Ok(())
 }
@@ -40,9 +124,10 @@ pub async fn download_listed_files(
 async fn download_file(
     link: &String,
     download_path: &str,
+    download_status: Arc<Mutex<JobStatus>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let url_str = Url::parse(link)?;
-    println!("Downloading file: {}", link);
+
     if let Some(segments) = url_str.path_segments() {
         if let Some(file_name) = segments.last() {
             let file_path = format!("{}/{}", download_path, file_name);
@@ -52,8 +137,7 @@ async fn download_file(
             std::io::copy(&mut content, &mut dest)?;
         }
     }
-
-    println!("Downloaded file: {}", link);
+    download_status.lock().unwrap().download_status = DownloadStatus::Completed;
     Ok(())
 }
 

@@ -1,7 +1,8 @@
 use reqwest::Url;
 use scraper::{Html, Selector};
 
-fn get_fake_links_for_test(url: &str) -> String {
+#[cfg(test)]
+fn get_fake_links_for_test(_url: &str) -> String {
     let body = r#"
     <!DOCTYPE html>
     <meta charset="utf-8">
