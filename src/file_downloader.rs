@@ -66,7 +66,7 @@ impl Future for DownloadProgressIndicator {
 
         let percent_of_done = (jobs_completed as f32 / number_of_jobs as f32) * 100.0;
 
-        let new_information_log = format!("Download in {}%", percent_of_done);
+        let new_information_log = format!("Download {}%", percent_of_done);
         if new_information_log != self.information_log {
             println!("{}", new_information_log);
             self.information_log = new_information_log;
@@ -76,8 +76,6 @@ impl Future for DownloadProgressIndicator {
             cx.waker().wake_by_ref();
             return std::task::Poll::Pending;
         }
-
-        println!("Download completed");
         std::task::Poll::Ready(true)
     }
 }
@@ -111,12 +109,12 @@ pub async fn download_listed_files(
         if res.is_err() {
             let error: Box<dyn Error> = Box::new(DownloadError);
             download_indicator_handler.abort();
-            println!("Error downloading files.");
+            println!("\x1b[91mError downloading files.\x1b[0m");
             return Err(error);
         }
     }
-
     download_indicator_handler.await.unwrap();
+    println!("\n\x1b[92mDownload completed!\x1b[0m");
 
     Ok(())
 }
